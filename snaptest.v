@@ -119,6 +119,7 @@ module snaptest(
   parameter SENDASCII = 5'd15;
   parameter SENDBACKSPACE = 5'd16;
   parameter SENDARROWKEY = 5'd17;
+  parameter SENDCAPSLOCK = 5'd18;
 
   always @ (posedge clk, posedge rst) begin
     if (rst) begin
@@ -182,6 +183,7 @@ module snaptest(
     				8'h66: state <= SENDBACKSPACE;
     				8'h75, 8'h6B, 8'h72, 8'h74: state <= SENDARROWKEY;
             8'h12, 8'h59: state <= IDLE; // if shift key is released w/o letter
+            8'h58: state <= SENDCAPSLOCK;
     				default: state <= SENDASCII;
     			endcase
 
@@ -191,7 +193,7 @@ module snaptest(
           else
             state <= IDLE;
 
-		    SENDARROWKEY, SENDBACKSPACE: state <= IDLE;
+		    SENDARROWKEY, SENDBACKSPACE, SENDCAPSLOCK: state <= IDLE;
 		endcase
     end
   end
@@ -253,8 +255,39 @@ module snaptest(
 	reg backspace_read;
 	reg arrowkey_read;
   reg shiftkey_read;
+  reg capslock_read;
 
-	parameter caps_small_base = 8'h61;
+  always @ (*)
+    if (state == SENDCAPSLOCK)
+      capslock_read <= 1'b1;
+    else
+      capslock_read <= 0;
+
+  always @ (*)
+    if ((state == SENDASCII) && ((keyval1 == 8'h12) || (keyval1 == 8'h59)))
+      shiftkey_read <= 1'b1;
+    else
+      shiftkey_read <= 0;
+
+  always @ (*)
+    if (state == SENDASCII)
+      ascii_read <= 1'b1;
+    else
+      ascii_read <= 0;
+
+  always @ (*)
+    if (state == SENDBACKSPACE)
+      backspace_read <= 1'b1;
+    else
+      backspace_read <= 0;
+
+  always @ (*)
+    if (state == SENDARROWKEY)
+      arrowkey_read <= 1'b1;
+    else
+      arrowkey_read <= 0;
+
+  parameter caps_small_base = 8'h61;
 	parameter caps_large_base = 8'h41;
 	reg [7:0] caps_base;
 
@@ -262,7 +295,7 @@ module snaptest(
     if (rst)
       caps_base <= caps_small_base;
     else
-      if (ascii_read)
+      if (capslock_read)
         case (caps_base)
           caps_small_base:
             if (keyval3 == 8'h58) caps_base <= caps_large_base;
@@ -271,8 +304,6 @@ module snaptest(
             if (keyval3 == 8'h58) caps_base <= caps_small_base;
             else caps_base <= caps_large_base;
         endcase
-
-  reg [7:0] keyval_kb;
 
 	always @ (posedge clk, posedge rst) begin
 		if (rst) begin
@@ -533,30 +564,6 @@ module snaptest(
 		end
 	end
 
-  always @ (*)
-    if ((state == SENDASCII) && ((keyval1 == 8'h12) || (keyval1 == 8'h59)))
-      shiftkey_read <= 1'b1;
-    else
-      shiftkey_read <= 0;
-
-  always @ (*)
-		if (state == SENDASCII)
-			ascii_read <= 1'b1;
-		else
-			ascii_read <= 0;
-
-	always @ (*)
-		if (state == SENDBACKSPACE)
-			backspace_read <= 1'b1;
-		else
-			backspace_read <= 0;
-
-	always @ (*)
-		if (state == SENDARROWKEY)
-			arrowkey_read <= 1'b1;
-		else
-			arrowkey_read <= 0;
-
 	assign caps_lock_make_code = (keyval3 == 8'h58) ? 1'b1 : 0;
 
   parameter S_IDLE = 5'd0;
@@ -806,4 +813,4 @@ module shift_register_8bit(
       if (en)
         sr <= {din, sr[7:1]};
 
-endmodule
+endmodule
