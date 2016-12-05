@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 module snaptest(
   input clk,
   input rst,
@@ -93,6 +94,13 @@ module snaptest(
   reg [4:0] state;
   reg [3:0] bit_count;
 
+  /**
+    * "State machine for getting keyboard data from PS2_CLK and PS2_DATA signal"
+    *
+    * WTCLKLO, SHIFT_IN, WTCLKHI, GETKEY -> The combination of these states gets
+    * 11 bits of data from PS2_DATA and PS2_CLK signals. This data is stored
+    * in a shift register
+    */
   parameter IDLE = 5'd0;
   parameter WTCLKLO1 = 5'd1;
   parameter SHIFT1_IN = 5'd2;
@@ -134,7 +142,7 @@ module snaptest(
           else state <= WTCLKHI1;
         GETKEY1: state <= WTCLKLO2;
 
-		  WTCLKLO2:
+		    WTCLKLO2:
           case (ps2cf)
             1'b0: state <= SHIFT2_IN;
             1'b1:
@@ -150,11 +158,12 @@ module snaptest(
         BREAKEY:
           if (keyval2 == 8'hF0)
             state <= WTCLKLO3;
+          else if (keyval1 == 8'hE0)
+            state <= WTCLKLO1;
+          else if ((keyval1 == 8'hF0) && ((keyval2 == 8'h12) || (keyval2 == 8'h59))) // for shift key release
+            state <= IDLE;
           else
-            if (keyval1 == 8'hE0)
-              state <= WTCLKLO1;
-            else
-              state <= WTCLKLO2;
+            state <= WTCLKLO2;
 
         WTCLKLO3:
           case (ps2cf)
@@ -168,13 +177,21 @@ module snaptest(
           if (ps2cf) state <= WTCLKLO3;
           else state <= WTCLKHI3;
         GETKEY3: state <= SENDDATA;
-		  SENDDATA:
-			case (keyval3)
-				8'h66: state <= SENDBACKSPACE;
-				8'h75, 8'h6B, 8'h72, 8'h74: state <= SENDARROWKEY;
-				default: state <= SENDASCII;
-			endcase
-		  SENDASCII, SENDARROWKEY, SENDBACKSPACE: state <= IDLE;
+		    SENDDATA:
+    			case (keyval3)
+    				8'h66: state <= SENDBACKSPACE;
+    				8'h75, 8'h6B, 8'h72, 8'h74: state <= SENDARROWKEY;
+            8'h12, 8'h59: state <= IDLE; // if shift key is released w/o letter
+    				default: state <= SENDASCII;
+    			endcase
+
+        SENDASCII:
+          if (keyval1 == 8'h12)
+            state <= WTCLKLO2;
+          else
+            state <= IDLE;
+
+		    SENDARROWKEY, SENDBACKSPACE: state <= IDLE;
 		endcase
     end
   end
@@ -235,37 +252,27 @@ module snaptest(
 	reg ascii_read;
 	reg backspace_read;
 	reg arrowkey_read;
-	reg caps_state;
-
-	parameter CAPS_SMALL = 1'b0;
-	parameter CAPS_LARGE = 1'b1;
+  reg shiftkey_read;
 
 	parameter caps_small_base = 8'h61;
 	parameter caps_large_base = 8'h41;
 	reg [7:0] caps_base;
 
+	always @ (posedge clk, posedge rst)
+    if (rst)
+      caps_base <= caps_small_base;
+    else
+      if (ascii_read)
+        case (caps_base)
+          caps_small_base:
+            if (keyval3 == 8'h58) caps_base <= caps_large_base;
+            else caps_base <= caps_small_base;
+          caps_large_base:
+            if (keyval3 == 8'h58) caps_base <= caps_small_base;
+            else caps_base <= caps_large_base;
+        endcase
 
-	always @ (negedge clk, posedge rst) begin
-		if (rst)
-			caps_state <= 0;
-		else
-			if (ascii_read)
-				case (caps_state)
-					CAPS_SMALL:
-						if (keyval3 == 8'h58) caps_state <= CAPS_LARGE;
-						else caps_state <= CAPS_SMALL;
-					CAPS_LARGE:
-						if (keyval3 == 8'h58) caps_state <= CAPS_SMALL;
-						else caps_state <= CAPS_LARGE;
-				endcase
-	end
-
-	always @ (*)
-		case (caps_state)
-			CAPS_SMALL: caps_base <= caps_small_base;
-			CAPS_LARGE: caps_base <= caps_large_base;
-		endcase
-
+  reg [7:0] keyval_kb;
 
 	always @ (posedge clk, posedge rst) begin
 		if (rst) begin
@@ -273,34 +280,240 @@ module snaptest(
 		end
 		else begin
 			if (state == SENDASCII) begin
-				case(keyval3)
-					8'h1C: ascii <= (caps_base + 0);	// a
-					8'h32: ascii <= (caps_base + 1);	// b
-					8'h21: ascii <= (caps_base + 2);	// c
-					8'h23: ascii <= (caps_base + 3);	// d
-					8'h24: ascii <= (caps_base + 4);	// e
-					8'h2B: ascii <= (caps_base + 5);	// f
-					8'h34: ascii <= (caps_base + 6);	// g
-					8'h33: ascii <= (caps_base + 7);	// h
-					8'h43: ascii <= (caps_base + 8);	// i
-					8'h3B: ascii <= (caps_base + 9);	// j
-					8'h42: ascii <= (caps_base + 10);	// k
-					8'h4B: ascii <= (caps_base + 11);	// l
-					8'h3A: ascii <= (caps_base + 12);	// m
-					8'h31: ascii <= (caps_base + 13);	// n
-					8'h44: ascii <= (caps_base + 14);	// o
-					8'h4D: ascii <= (caps_base + 15);	// p
-					8'h15: ascii <= (caps_base + 16);	// q
-					8'h2D: ascii <= (caps_base + 17);	// r
-					8'h1B: ascii <= (caps_base + 18);	// s
-					8'h2C: ascii <= (caps_base + 19);	// t
-					8'h3C: ascii <= (caps_base + 20);	// u
-					8'h2A: ascii <= (caps_base + 21);	// v
-					8'h1D: ascii <= (caps_base + 22);	// w
-					8'h22: ascii <= (caps_base + 23);	// x
-					8'h35: ascii <= (caps_base + 24);	// y
-					8'h1A: ascii <= (caps_base + 25);	// z
+				case (keyval3)
+					8'h1C:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 0);
+                caps_large_base: ascii <= (caps_small_base + 0);
+              endcase
+            else
+              ascii <= (caps_base + 0);	// a
 
+					8'h32:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 1);
+                caps_large_base: ascii <= (caps_small_base + 1);
+              endcase
+            else
+              ascii <= (caps_base + 1);	// b
+
+					8'h21:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 2);
+                caps_large_base: ascii <= (caps_small_base + 2);
+              endcase
+            else
+              ascii <= (caps_base + 2);	// c
+
+					8'h23:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 3);
+                caps_large_base: ascii <= (caps_small_base + 3);
+              endcase
+            else
+              ascii <= (caps_base + 3);	// d
+
+					8'h24:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 4);
+                caps_large_base: ascii <= (caps_small_base + 4);
+              endcase
+            else
+              ascii <= (caps_base + 4);	// e
+
+					8'h2B:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 5);
+                caps_large_base: ascii <= (caps_small_base + 5);
+              endcase
+            else
+              ascii <= (caps_base + 5);	// f
+
+					8'h34:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 6);
+                caps_large_base: ascii <= (caps_small_base + 6);
+              endcase
+            else
+              ascii <= (caps_base + 6);	// g
+
+					8'h33:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 7);
+                caps_large_base: ascii <= (caps_small_base + 7);
+              endcase
+            else
+              ascii <= (caps_base + 7);	// h
+
+					8'h43:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 8);
+                caps_large_base: ascii <= (caps_small_base + 8);
+              endcase
+            else
+              ascii <= (caps_base + 8);	// i
+
+					8'h3B:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 9);
+                caps_large_base: ascii <= (caps_small_base + 9);
+              endcase
+            else
+              ascii <= (caps_base + 9);	// j
+
+					8'h42:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 10);
+                caps_large_base: ascii <= (caps_small_base + 10);
+              endcase
+            else
+              ascii <= (caps_base + 10);	// k
+
+					8'h4B:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 11);
+                caps_large_base: ascii <= (caps_small_base + 11);
+              endcase
+            else
+              ascii <= (caps_base + 11);	// l
+
+					8'h3A:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 12);
+                caps_large_base: ascii <= (caps_small_base + 12);
+              endcase
+            else
+              ascii <= (caps_base + 12);	// m
+
+					8'h31:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 13);
+                caps_large_base: ascii <= (caps_small_base + 13);
+              endcase
+            else
+              ascii <= (caps_base + 13);	// n
+
+					8'h44:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 14);
+                caps_large_base: ascii <= (caps_small_base + 14);
+              endcase
+            else
+              ascii <= (caps_base + 14);	// o
+
+					8'h4D:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 15);
+                caps_large_base: ascii <= (caps_small_base + 15);
+              endcase
+            else
+              ascii <= (caps_base + 15);	// p
+
+					8'h15:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 16);
+                caps_large_base: ascii <= (caps_small_base + 16);
+              endcase
+            else
+              ascii <= (caps_base + 16);	// q
+
+					8'h2D:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 17);
+                caps_large_base: ascii <= (caps_small_base + 17);
+              endcase
+            else
+              ascii <= (caps_base + 17);	// r
+
+					8'h1B:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 18);
+                caps_large_base: ascii <= (caps_small_base + 18);
+              endcase
+            else
+              ascii <= (caps_base + 18);	// s
+
+					8'h2C:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 19);
+                caps_large_base: ascii <= (caps_small_base + 19);
+              endcase
+            else
+              ascii <= (caps_base + 19);	// t
+
+					8'h3C:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 20);
+                caps_large_base: ascii <= (caps_small_base + 20);
+              endcase
+            else
+              ascii <= (caps_base + 20);	// u
+
+					8'h2A:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 21);
+                caps_large_base: ascii <= (caps_small_base + 21);
+              endcase
+            else
+              ascii <= (caps_base + 21);	// v
+
+					8'h1D:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 22);
+                caps_large_base: ascii <= (caps_small_base + 22);
+              endcase
+            else
+              ascii <= (caps_base + 22);	// w
+
+					8'h22:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 23);
+                caps_large_base: ascii <= (caps_small_base + 23);
+              endcase
+            else
+              ascii <= (caps_base + 23);	// x
+
+					8'h35:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 24);
+                caps_large_base: ascii <= (caps_small_base + 24);
+              endcase
+            else
+              ascii <= (caps_base + 24);	// y
+
+					8'h1A:
+            if (shiftkey_read)
+              case (caps_base)
+                caps_small_base: ascii <= (caps_large_base + 25);
+                caps_large_base: ascii <= (caps_small_base + 25);
+              endcase
+            else
+              ascii <= (caps_base + 25);	// z
 
 					8'h45, 8'h70: ascii <= 8'h30;	// 0
 					8'h16, 8'h69: ascii <= 8'h31;	// 1
@@ -320,7 +533,13 @@ module snaptest(
 		end
 	end
 
-	always @ (*)
+  always @ (*)
+    if ((state == SENDASCII) && ((keyval1 == 8'h12) || (keyval1 == 8'h59)))
+      shiftkey_read <= 1'b1;
+    else
+      shiftkey_read <= 0;
+
+  always @ (*)
 		if (state == SENDASCII)
 			ascii_read <= 1'b1;
 		else
@@ -363,76 +582,81 @@ module snaptest(
   reg [4:0] data_controller_state;
   reg [5:0] char_count;
 
-  always@(posedge clk)
+  always @ (posedge clk, posedge rst)
     if (rst)
       data_controller_state <= S_IDLE;
     else
       case(data_controller_state)
         S_IDLE:
     			if (!caps_lock_make_code)
-    				case ({busy, data_ready})
-    					2'b10: data_controller_state <= S_IDLE;
-    					2'b01: data_controller_state <= S_2;
-    					default: data_controller_state <= S_IDLE;
-    				endcase
+            if (char_count == 6'd32)
+              data_controller_state <= S_CNT32;
+            else
+      				case ({busy, data_ready})
+      					2'b10: data_controller_state <= S_IDLE;
+      					2'b01: data_controller_state <= S_2;
+      					default: data_controller_state <= S_IDLE;
+      				endcase
     			else
     				data_controller_state <= S_IDLE;
-      S_2:
-  			if (backspace_read)
-  				data_controller_state <= S_BACKSPACE;
-  			else if (ascii_read)
-  				data_controller_state <= S_ASCII;
-  			else if (arrowkey_read)
-  				data_controller_state <= S_ARROWKEY;
-      S_ASCII:
-        if (char_count == 6'd16)
-          data_controller_state <= S_CNT16;
-        else if (char_count == 6'd32)
-          data_controller_state <= S_CNT32;
-        else
-          data_controller_state <= S_WRASCII1;
-		  S_WRASCII1: data_controller_state <= S_WRASCII2;
-		  S_WRASCII2:
-  			if (!busy)
-  				data_controller_state <= S_WRASCII3;
-  			else
-  				data_controller_state <= S_WRASCII2;
-		  S_WRASCII3:
-        case (char_count)
-          6'd32: data_controller_state <= S_CNT32;
-          default: data_controller_state <= S_IDLE;
-        endcase
-		  S_CNT16: data_controller_state <= S_WRASCII1;
-		  S_CNT32: data_controller_state <= S_WRASCII1;
 
-		  S_BACKSPACE:
-  			if (char_count == 0)
-  				data_controller_state <= S_MOVEADDRLOWRIGHTA;
-  			else
-  				data_controller_state <= S_MOVEADDRLEFTA;
+        S_2:
+    			if (backspace_read)
+    				data_controller_state <= S_BACKSPACE;
+    			else if (ascii_read)
+    				data_controller_state <= S_ASCII;
+    			else if (arrowkey_read)
+    				data_controller_state <= S_ARROWKEY;
 
-		  S_MOVEADDRLEFTA: data_controller_state <= S_WRSPACE;
-		  S_MOVEADDRLOWRIGHTA: data_controller_state <= S_WRSPACE;
-		  S_WRSPACE:
-  			if (char_count == 0)
-  				data_controller_state <= S_MOVEADDRLOWRIGHTB;
-  			else
-  				data_controller_state <= S_MOVEADDRLEFTB;
-		  S_MOVEADDRLEFTB: data_controller_state <= S_IDLE;
-		  S_MOVEADDRLOWRIGHTB: data_controller_state <= S_IDLE;
+        S_ASCII:
+          if (char_count == 6'd16)
+            data_controller_state <= S_CNT16;
+          else
+            data_controller_state <= S_WRASCII1;
 
-		  S_ARROWKEY:
-        case (keyval3)
-          8'h75: data_controller_state <= S_MOVEADDRARWUP;
-          8'h72: data_controller_state <= S_MOVEADDRARWDOWN;
-          8'h6B: data_controller_state <= S_MOVEADDRARWLEFT;
-          8'h74: data_controller_state <= S_MOVEADDRARWRIGHT;
-        endcase
+  		  S_WRASCII1: data_controller_state <= S_WRASCII2;
 
-      S_MOVEADDRARWUP: data_controller_state <= S_IDLE;
-      S_MOVEADDRARWDOWN: data_controller_state <= S_IDLE;
-      S_MOVEADDRARWLEFT: data_controller_state <= S_IDLE;
-      S_MOVEADDRARWRIGHT: data_controller_state <= S_IDLE;
+  		  S_WRASCII2:
+    			if (!busy)
+    				data_controller_state <= S_WRASCII3;
+    			else
+    				data_controller_state <= S_WRASCII2;
+
+  		  S_WRASCII3: data_controller_state <= S_IDLE;
+
+  		  S_CNT16: data_controller_state <= S_WRASCII1;
+  		  S_CNT32: data_controller_state <= S_IDLE;
+
+  		  S_BACKSPACE:
+    			if (char_count == 0)
+    				data_controller_state <= S_MOVEADDRLOWRIGHTA;
+    			else
+    				data_controller_state <= S_MOVEADDRLEFTA;
+
+  		  S_MOVEADDRLEFTA: data_controller_state <= S_WRSPACE;
+  		  S_MOVEADDRLOWRIGHTA: data_controller_state <= S_WRSPACE;
+
+  		  S_WRSPACE:
+    			if (char_count == 0)
+    				data_controller_state <= S_MOVEADDRLOWRIGHTB;
+    			else
+    				data_controller_state <= S_MOVEADDRLEFTB;
+
+  		  S_MOVEADDRLEFTB: data_controller_state <= S_IDLE;
+  		  S_MOVEADDRLOWRIGHTB: data_controller_state <= S_IDLE;
+
+  		  S_ARROWKEY:
+          case (keyval3)
+            8'h75: data_controller_state <= S_MOVEADDRARWUP;
+            8'h72: data_controller_state <= S_MOVEADDRARWDOWN;
+            8'h6B: data_controller_state <= S_MOVEADDRARWLEFT;
+            8'h74: data_controller_state <= S_MOVEADDRARWRIGHT;
+          endcase
+
+        S_MOVEADDRARWUP: data_controller_state <= S_IDLE;
+        S_MOVEADDRARWDOWN: data_controller_state <= S_IDLE;
+        S_MOVEADDRARWLEFT: data_controller_state <= S_IDLE;
+        S_MOVEADDRARWRIGHT: data_controller_state <= S_IDLE;
 		endcase
 
   reg [5:0] char_count_sub;
@@ -453,55 +677,67 @@ module snaptest(
       char_count_sub <= 6'd17;
 
 	// {cmd,data} output
-  always@(posedge clk)
-    if (rst) begin
+  always @ (posedge clk, posedge rst)
+    if (rst)
       {cmd,data} <= 0;
-    end
     else
-		case (data_controller_state)
-			S_WRASCII3: {cmd,data} <= {1'b0, ascii};
-			S_CNT16: {cmd,data} <= {1'b1, 8'hC0};
-			S_CNT32: {cmd,data} <= {1'b1, 8'h80};
-			S_MOVEADDRLEFTA, S_MOVEADDRLEFTB: {cmd, data} <= {1'b1, 1'b1, line_bit, char_count[5:0] - char_count_sub};
-			S_WRSPACE: {cmd, data} <= {1'b0, 8'h20};
-			S_MOVEADDRLOWRIGHTA, S_MOVEADDRLOWRIGHTB:
-				{cmd, data} <= {1'b1, 8'hCF};
-      S_MOVEADDRARWUP, S_MOVEADDRARWDOWN:
-        if (line_bit)
-          // char_count_sub here is 6'd17
-          {cmd, data} <= {1'b1, 2'b10, char_count[5:0] - char_count_sub + 6'd1};
-        else
-          {cmd, data} <= {1'b1, 2'b11, char_count[5:0]};
-
-      S_MOVEADDRARWLEFT:
-        if (char_count == 6'd16)
-          {cmd, data} <= {1'b1, 8'h8F};
-        else if (char_count == 6'd32)
-          {cmd, data} <= {1'b1, 8'hCF};
-        else
+  		case (data_controller_state)
+  			S_WRASCII3: {cmd,data} <= {1'b0, ascii};
+  			S_CNT16: {cmd,data} <= {1'b1, 8'hC0};
+  			S_CNT32: {cmd,data} <= {1'b1, 8'h80};
+  			S_MOVEADDRLEFTA,
+        S_MOVEADDRLEFTB:
           {cmd, data} <= {1'b1, 1'b1, line_bit, char_count[5:0] - char_count_sub};
-      S_MOVEADDRARWRIGHT:
-        if (char_count == 6'd16)
-          {cmd, data} <= {1'b1, 8'hC0};
-        else if (char_count == 6'd32)
-          {cmd, data} <= {1'b1, 8'h80};
-        else
-          {cmd, data} <= {1'b1, 1'b1, line_bit, char_count[5:0] - char_count_sub + 1'd1};
-		endcase
+  			S_WRSPACE: {cmd, data} <= {1'b0, 8'h20};
+  			S_MOVEADDRLOWRIGHTA, S_MOVEADDRLOWRIGHTB:
+  				{cmd, data} <= {1'b1, 8'hCF};
+
+        S_MOVEADDRARWUP, S_MOVEADDRARWDOWN:
+          if (line_bit)
+            // char_count_sub here is 6'd17
+            {cmd, data} <= {1'b1, 1'b1, ~line_bit, char_count[5:0] - char_count_sub + 6'd1};
+          else
+            {cmd, data} <= {1'b1, 1'b1, ~line_bit, char_count[5:0]};
+
+        S_MOVEADDRARWLEFT:
+          if (char_count == 6'd16)
+            {cmd, data} <= {1'b1, 8'h8F};
+          else if (char_count == 6'd0)
+            {cmd, data} <= {1'b1, 8'hCF};
+          else
+            {cmd, data} <= {1'b1, 1'b1, line_bit, char_count[5:0] - char_count_sub};
+
+        S_MOVEADDRARWRIGHT:
+          if (char_count == 6'd15)
+            {cmd, data} <= {1'b1, 8'hC0};
+          else if (char_count == 6'd31)
+            {cmd, data} <= {1'b1, 8'h80};
+          else
+            {cmd, data} <= {1'b1, 1'b1, line_bit, char_count[5:0] - char_count_sub + 6'd2};
+  		endcase
 
 	// en output
   always @ (posedge clk)
     if (rst)
       en <= 0;
     else
-		case (data_controller_state)
-			S_WRASCII3, S_CNT16, S_CNT32, S_MOVEADDRLEFTA, S_MOVEADDRLEFTB,
-			S_WRSPACE, S_MOVEADDRLOWRIGHTA, S_MOVEADDRLOWRIGHTB,
-      S_MOVEADDRARWUP, S_MOVEADDRARWDOWN, S_MOVEADDRARWLEFT, S_MOVEADDRARWRIGHT:
-				en <= 1'b1;
-			default:
-				en <= 0;
-		endcase
+  		case (data_controller_state)
+  			S_WRASCII3,
+        S_CNT16,
+        S_CNT32,
+        S_MOVEADDRLEFTA,
+        S_MOVEADDRLEFTB,
+  			S_WRSPACE,
+        S_MOVEADDRLOWRIGHTA,
+        S_MOVEADDRLOWRIGHTB,
+        S_MOVEADDRARWUP,
+        S_MOVEADDRARWDOWN,
+        S_MOVEADDRARWLEFT,
+        S_MOVEADDRARWRIGHT:
+  				en <= 1'b1;
+  			default:
+  				en <= 0;
+		  endcase
 
 	always @ (posedge clk, posedge rst) begin
 		if (rst)
@@ -512,7 +748,8 @@ module snaptest(
 				S_CNT32: char_count <= 0;
 				S_MOVEADDRLEFTB: char_count <= char_count - 1;
         S_MOVEADDRLOWRIGHTB: char_count <= 6'd31;
-        S_MOVEADDRARWUP, S_MOVEADDRARWDOWN:
+        S_MOVEADDRARWUP,
+        S_MOVEADDRARWDOWN:
           if (char_count > 16)
             char_count <= char_count - 6'd16;
           else
@@ -522,7 +759,11 @@ module snaptest(
             char_count <= 6'd31;
           else
             char_count <= char_count - 1;
-        S_MOVEADDRARWRIGHT: char_count <= char_count + 1;
+        S_MOVEADDRARWRIGHT:
+          if (char_count == 6'd31)
+            char_count <= 0;
+          else
+            char_count <= char_count + 1;
 			endcase
 	end
 
@@ -530,7 +771,7 @@ module snaptest(
     if (rst)
       LED <= 0;
     else
-		  LED <= char_count;
+		  LED <= keyval1;
   end
 endmodule
 
